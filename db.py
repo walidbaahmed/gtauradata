@@ -1,21 +1,24 @@
-import sqlite3
-import hashlib
 import psycopg2
+import socket
 import streamlit as st
 
-def hash_password(password):
-    return hashlib.sha256(password.encode()).hexdigest()
-
 def get_connection():
+    # 🔹 Récupération du host depuis secrets
+    host = st.secrets["postgres"]["host"]
+
+    # 🔹 Force la résolution en IPv4 (évite le problème "not IPv4 compatible")
+    ipv4_host = socket.gethostbyname(host)
+
+    # 🔹 Connexion sécurisée avec SSL obligatoire
     conn = psycopg2.connect(
-        host=st.secrets["postgres"]["host"],
+        host=ipv4_host,
         database=st.secrets["postgres"]["dbname"],
         user=st.secrets["postgres"]["user"],
         password=st.secrets["postgres"]["password"],
-        port=st.secrets["postgres"]["port"]
+        port=st.secrets["postgres"]["port"],
+        sslmode="require"  # <- Supabase exige SSL
     )
     return conn
-
 def init_db():
     conn = get_connection()
     cursor = conn.cursor()
