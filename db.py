@@ -1,5 +1,6 @@
 import psycopg2
 import socket
+import hashlib 
 import streamlit as st
 
 def get_connection():
