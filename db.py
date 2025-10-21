@@ -1,38 +1,43 @@
 import psycopg2
 import socket
-import hashlib 
+import hashlib
 import streamlit as st
 
-def get_connection():
-    # 🔹 Récupération du host depuis secrets
-    host = st.secrets["postgres"]["host"]
 
-    # 🔹 Force la résolution en IPv4 (évite le problème "not IPv4 compatible")
+# ✅ Hachage du mot de passe
+def hash_password(password):
+    return hashlib.sha256(password.encode()).hexdigest()
+
+
+# ✅ Connexion à Supabase PostgreSQL (IPv4 + SSL)
+def get_connection():
+    host = st.secrets["postgres"]["host"]
     ipv4_host = socket.gethostbyname(host)
 
-    # 🔹 Connexion sécurisée avec SSL obligatoire
     conn = psycopg2.connect(
         host=ipv4_host,
         database=st.secrets["postgres"]["dbname"],
         user=st.secrets["postgres"]["user"],
         password=st.secrets["postgres"]["password"],
         port=st.secrets["postgres"]["port"],
-        sslmode="require"  # <- Supabase exige SSL
+        sslmode="require"
     )
     return conn
+
+
 def init_db():
     conn = get_connection()
     cursor = conn.cursor()
 
     cursor.execute("""
         CREATE TABLE IF NOT EXISTS users (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            id SERIAL PRIMARY KEY,
             email TEXT UNIQUE NOT NULL,
             name TEXT NOT NULL,
             password_hashed TEXT NOT NULL,
-            is_active INTEGER DEFAULT 1,
-            must_change_password INTEGER DEFAULT 0,
-            activated_once INTEGER DEFAULT 0
+            is_active BOOLEAN DEFAULT TRUE,
+            must_change_password BOOLEAN DEFAULT FALSE,
+            activated_once BOOLEAN DEFAULT FALSE
         )
     """)
 
@@ -46,7 +51,7 @@ def init_db():
 
     cursor.execute("""
         CREATE TABLE IF NOT EXISTS feuille_temps (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            id SERIAL PRIMARY KEY,
             user_id INTEGER NOT NULL,
             date DATE NOT NULL,
             statut_jour TEXT CHECK (statut_jour IN ('travail', 'télétravail', 'congé', 'maladie', 'RTT')) DEFAULT 'travail',
@@ -58,7 +63,7 @@ def init_db():
 
     cursor.execute("""
         CREATE TABLE IF NOT EXISTS absences (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            id SERIAL PRIMARY KEY,
             user_id INTEGER NOT NULL,
             type_absence TEXT NOT NULL,
             date_debut DATE NOT NULL,
@@ -73,7 +78,7 @@ def init_db():
 
     cursor.execute("""
         CREATE TABLE IF NOT EXISTS validation_absence (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            id SERIAL PRIMARY KEY,
             absence_id INTEGER NOT NULL,
             validateur_id INTEGER NOT NULL,
             date_validation DATE,
@@ -83,7 +88,7 @@ def init_db():
             FOREIGN KEY(validateur_id) REFERENCES users(id)
         )
     """)
-    
+
     cursor.execute("""
         CREATE TABLE IF NOT EXISTS feuille_temps_statut (
             user_id INTEGER NOT NULL,
@@ -98,7 +103,7 @@ def init_db():
 
     cursor.execute("""
         CREATE TABLE IF NOT EXISTS projets (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            id SERIAL PRIMARY KEY,
             nom TEXT NOT NULL,
             outil TEXT NOT NULL,
             heures_prevues INTEGER
@@ -107,7 +112,7 @@ def init_db():
 
     cursor.execute("""
         CREATE TABLE IF NOT EXISTS attribution_projet (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            id SERIAL PRIMARY KEY,
             user_id INTEGER NOT NULL,
             projet_id INTEGER NOT NULL,
             FOREIGN KEY(user_id) REFERENCES users(id),
@@ -115,10 +120,10 @@ def init_db():
             UNIQUE(user_id, projet_id)
         )
     """)
-    
+
     cursor.execute("""
         CREATE TABLE IF NOT EXISTS heures_saisie (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            id SERIAL PRIMARY KEY,
             user_id INTEGER NOT NULL,
             projet_id INTEGER NOT NULL,
             date_jour DATE NOT NULL,
@@ -137,4 +142,3 @@ def init_db():
 
     conn.commit()
     conn.close()
-
