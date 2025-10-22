@@ -1,98 +1,42 @@
+from supabase import create_client, Client
 import streamlit as st
-from streamlit_option_menu import option_menu
-from login import show_login_page
+import hashlib
 
-st.set_page_config(page_title="GT Auradata", page_icon="assets/favicon.png", layout="wide")
+# ✅ Initialisation du client Supabase
+@st.cache_resource
+def init_supabase() -> Client:
+    url = st.secrets["supabase"]["url"]
+    key = st.secrets["supabase"]["key"]
+    return create_client(url, key)
 
-st.markdown("""
-    <style>
-        [data-testid="stSidebar"] > div:first-child {
-            overflow-y: hidden;
-        }
-            
-        .nav-link:has(span:not(:empty)):hover {
-            background-color: blue !important;
-            cursor: pointer;
-        }
+supabase = init_supabase()
 
-        .nav-link:has(span:empty):hover {
-            background-color: transparent !important;
-            cursor: default;
-        }
-    </style>
-""", unsafe_allow_html=True)
+# ✅ Hachage des mots de passe
+def hash_password(password: str) -> str:
+    return hashlib.sha256(password.encode()).hexdigest()
 
+# ✅ Vérification de l’utilisateur (login)
+def verify_user(email: str, password: str):
+    hashed = hash_password(password)
+    response = supabase.table("users").select("*").eq("email", email).eq("password_hashed", hashed).execute()
+    if response.data and len(response.data) > 0:
+        return response.data[0]
+    return None
 
-if "logged_in" not in st.session_state or not st.session_state.logged_in:
-    show_login_page()
+# ✅ Création d’un utilisateur (ex: admin initial)
+def create_user(email: str, name: str, password: str, role: str = "admin"):
+    hashed = hash_password(password)
+    supabase.table("users").insert({
+        "email": email,
+        "name": name,
+        "password_hashed": hashed,
+        "is_active": True
+    }).execute()
 
-else:
-    with st.sidebar:
-        col1, col2, col3 = st.columns([0.5, 2, 0.5])
-        with col2:
-            st.image("assets/logo.png", width=130)
+    user = supabase.table("users").select("id").eq("email", email).execute().data[0]
 
-        st.markdown("<div style='flex:1;></div>", unsafe_allow_html=True)
-        selected = option_menu(
-            "",
-            ["Dashboard", "Feuille de temps", "Demande d'absence", "Validation absence", "Validation feuille","","","Administration", "Compte rendu d'activité", "Guide utilisateur", "Déconnexion"],
-            icons=["bar-chart", "clock", "file-earmark-text", "check-circle", "check-square","\u200b","\u200b", "gear", "journal-text", "book","box-arrow-right"],
-            menu_icon="none",
-            styles={
-                "container": {
-                    "background-color": "transparent",
-                    "width":"230px",
-                    "padding": "0px",
-                    "margin": "0px",
-                },
-                "nav-link": {
-                    "font-size": "14px",
-                    "font-family": "Segoe UI",
-                    "text-align": "left",
-                    "padding": "10px",
-                    "margin": "0px",
-                    "color": "#333333",
-                },
-                "nav-link-selected": {
-                    "background-color": "#080686",
-                    "color": "white",
-                    "font-weight": "bold",
-                },
-            }
-        )
-
-    if selected == "Dashboard":
-        import dashboard
-        dashboard.show_dashboard()
-
-    elif selected == "Feuille de temps":
-        import feuille_temps
-        feuille_temps.show_feuille_temps()
-
-    elif selected == "Demande d'absence":
-        import demande_absence
-        demande_absence.show_demande_absence()
-    
-    elif selected == "Validation absence":
-        import validation_absence
-        validation_absence.show_validation_absence()
-
-    elif selected == "Validation feuille":
-        import validation_feuille
-        validation_feuille.show_validation_feuille()
-
-    elif selected == "Administration":
-        import admin
-        admin.show_admin()
-
-    elif selected == "Compte rendu d'activité":
-        import compte_rendu_activite
-        compte_rendu_activite.show_compte_rendu_activite()
-
-    elif selected == "Guide utilisateur":
-        import guide_utilisateur
-        guide_utilisateur.show_guide_utilisateur()
-
-    elif selected == "Déconnexion":
-        st.session_state.logged_in = False
-        st.rerun()
+    supabase.table("roles").insert({
+        "user_id": user["id"],
+        "role": role
+    }).execute()
+    return True
