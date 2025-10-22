@@ -55,6 +55,7 @@ xlsxwriter==3.2.5
 psycopg2-binary
 streamlit-lottie
 python-docx
+supabase==2.4.3
 
 
 
