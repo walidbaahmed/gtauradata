@@ -2,7 +2,7 @@ import streamlit as st
 from supabase import create_client
 import hashlib
 
-# ✅ Initialisation Supabase
+# ✅ Connexion Supabase (API, pas PostgreSQL direct)
 @st.cache_resource
 def init_supabase():
     url = st.secrets["supabase"]["url"]
@@ -11,17 +11,17 @@ def init_supabase():
 
 supabase = init_supabase()
 
-# ✅ Hachage de mot de passe
-def hash_password(password):
+# ✅ Fonction de hachage
+def hash_password(password: str) -> str:
     return hashlib.sha256(password.encode()).hexdigest()
 
-# ✅ Vérifier un utilisateur
-def verify_user(email, password):
+# ✅ Vérification d’un utilisateur
+def verify_user(email: str, password: str):
     hashed = hash_password(password)
     try:
         response = (
             supabase.table("users")
-            .select("id, email, name, password_hashed, roles(role)")
+            .select("id, email, name, password_hashed, is_active, roles(role)")
             .eq("email", email)
             .eq("password_hashed", hashed)
             .execute()
@@ -33,7 +33,7 @@ def verify_user(email, password):
         st.error(f"Erreur Supabase : {e}")
         return None
 
-# ✅ Créer un utilisateur
+# ✅ Création d’un utilisateur
 def create_user(email, name, password, role="admin"):
     hashed = hash_password(password)
     try:
@@ -50,8 +50,8 @@ def create_user(email, name, password, role="admin"):
             "user_id": user_id,
             "role": role
         }).execute()
-        return True
 
+        return True
     except Exception as e:
         st.error(f"Erreur lors de la création de l’utilisateur : {e}")
         return False
