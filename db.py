@@ -1,61 +1,135 @@
-from supabase import create_client, Client
-import streamlit as st
+import sqlite3
 import hashlib
+import psycopg2
+import streamlit as st
 
-# ✅ Connexion à Supabase
-@st.cache_resource
-def init_supabase() -> Client:
-    """
-    Initialise la connexion Supabase à partir des secrets Streamlit.
-    """
-    url = st.secrets["supabase"]["url"]
-    key = st.secrets["supabase"]["key"]
-    return create_client(url, key)
-
-supabase = init_supabase()
-
-# ✅ Fonction de hachage de mot de passe
-def hash_password(password: str) -> str:
-    """
-    Hache un mot de passe avec SHA256.
-    """
+def hash_password(password):
     return hashlib.sha256(password.encode()).hexdigest()
 
-# ✅ Authentification utilisateur
-def verify_user(email: str, password: str):
-    """
-    Vérifie les identifiants d’un utilisateur.
-    Retourne l’utilisateur si trouvé, sinon None.
-    """
-    hashed = hash_password(password)
-    response = supabase.table("users").select("*").eq("email", email).eq("password_hashed", hashed).execute()
+def get_connection():
+    conn = psycopg2.connect(
+        host=st.secrets["postgres"]["host"],
+        database=st.secrets["postgres"]["dbname"],
+        user=st.secrets["postgres"]["user"],
+        password=st.secrets["postgres"]["password"],
+        port=st.secrets["postgres"]["port"]
+    )
+    return conn
 
-    if response.data and len(response.data) > 0:
-        return response.data[0]
-    return None
+def init_db():
+    conn = get_connection()
+    cursor = conn.cursor()
 
-# ✅ Création d’un utilisateur (ex: admin au premier lancement)
-def create_user(email: str, name: str, password: str, role: str = "admin"):
-    """
-    Crée un nouvel utilisateur avec son rôle associé.
-    """
-    hashed = hash_password(password)
+    cursor.execute("""
+        CREATE TABLE IF NOT EXISTS users (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            email TEXT UNIQUE NOT NULL,
+            name TEXT NOT NULL,
+            password_hashed TEXT NOT NULL,
+            is_active INTEGER DEFAULT 1,
+            must_change_password INTEGER DEFAULT 0,
+            activated_once INTEGER DEFAULT 0
+        )
+    """)
 
-    # Crée l'utilisateur
-    supabase.table("users").insert({
-        "email": email,
-        "name": name,
-        "password_hashed": hashed,
-        "is_active": True
-    }).execute()
+    cursor.execute("""
+        CREATE TABLE IF NOT EXISTS roles (
+            user_id INTEGER PRIMARY KEY,
+            role TEXT CHECK (role IN ('consultant', 'rh', 'admin')) DEFAULT 'consultant',
+            FOREIGN KEY(user_id) REFERENCES users(id) ON DELETE CASCADE
+        )
+    """)
 
-    # Récupère son id
-    user = supabase.table("users").select("id").eq("email", email).execute().data[0]
+    cursor.execute("""
+        CREATE TABLE IF NOT EXISTS feuille_temps (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            user_id INTEGER NOT NULL,
+            date DATE NOT NULL,
+            statut_jour TEXT CHECK (statut_jour IN ('travail', 'télétravail', 'congé', 'maladie', 'RTT')) DEFAULT 'travail',
+            valeur REAL CHECK (valeur IN (0, 0.5, 1)) DEFAULT 1,
+            FOREIGN KEY(user_id) REFERENCES users(id),
+            UNIQUE(user_id, date)
+        )
+    """)
 
-    # Associe un rôle
-    supabase.table("roles").insert({
-        "user_id": user["id"],
-        "role": role
-    }).execute()
+    cursor.execute("""
+        CREATE TABLE IF NOT EXISTS absences (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            user_id INTEGER NOT NULL,
+            type_absence TEXT NOT NULL,
+            date_debut DATE NOT NULL,
+            date_fin DATE NOT NULL,
+            commentaire TEXT,
+            statut TEXT CHECK (statut IN ('En attente', 'Approuvée', 'Rejetée')) DEFAULT 'En attente',
+            date_demande DATE,
+            justificatif TEXT,
+            FOREIGN KEY(user_id) REFERENCES users(id)
+        )
+    """)
 
-    return True
+    cursor.execute("""
+        CREATE TABLE IF NOT EXISTS validation_absence (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            absence_id INTEGER NOT NULL,
+            validateur_id INTEGER NOT NULL,
+            date_validation DATE,
+            statut TEXT CHECK (statut IN ('Approuvée', 'Rejetée')),
+            commentaire TEXT,
+            FOREIGN KEY(absence_id) REFERENCES absences(id),
+            FOREIGN KEY(validateur_id) REFERENCES users(id)
+        )
+    """)
+    
+    cursor.execute("""
+        CREATE TABLE IF NOT EXISTS feuille_temps_statut (
+            user_id INTEGER NOT NULL,
+            annee INTEGER NOT NULL,
+            mois INTEGER NOT NULL,
+            statut TEXT CHECK (statut IN ('brouillon', 'en attente', 'validée', 'rejetée')) DEFAULT 'brouillon',
+            motif_refus TEXT,
+            PRIMARY KEY(user_id, annee, mois),
+            FOREIGN KEY(user_id) REFERENCES users(id)
+        )
+    """)
+
+    cursor.execute("""
+        CREATE TABLE IF NOT EXISTS projets (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            nom TEXT NOT NULL,
+            outil TEXT NOT NULL,
+            heures_prevues INTEGER
+        )
+    """)
+
+    cursor.execute("""
+        CREATE TABLE IF NOT EXISTS attribution_projet (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            user_id INTEGER NOT NULL,
+            projet_id INTEGER NOT NULL,
+            FOREIGN KEY(user_id) REFERENCES users(id),
+            FOREIGN KEY(projet_id) REFERENCES projets(id),
+            UNIQUE(user_id, projet_id)
+        )
+    """)
+    
+    cursor.execute("""
+        CREATE TABLE IF NOT EXISTS heures_saisie (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            user_id INTEGER NOT NULL,
+            projet_id INTEGER NOT NULL,
+            date_jour DATE NOT NULL,
+            heures REAL NOT NULL,
+            UNIQUE(user_id, projet_id, date_jour)
+        )
+    """)
+
+    cursor.execute("""
+        CREATE TABLE IF NOT EXISTS parametres_conges (
+            annee INTEGER PRIMARY KEY,
+            cp_total INTEGER NOT NULL,
+            rtt_total INTEGER NOT NULL
+        )
+    """)
+
+    conn.commit()
+    conn.close()
