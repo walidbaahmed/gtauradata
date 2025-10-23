@@ -54,6 +54,8 @@ urllib3==2.5.0
 watchdog==6.0.0
 xlsxwriter==3.2.5
 python-docx==1.1.2
+psycopg[binary]
+
 
 # --- dépendances base de données ---
 psycopg[binary]==3.2.3
