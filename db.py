@@ -1,130 +1,98 @@
-# db.py
-import hashlib
 import streamlit as st
+from streamlit_option_menu import option_menu
+from login import show_login_page
 
-# --- Connexion PostgreSQL (pour accès direct à la base si besoin) -------------
-try:
-    import psycopg
-except Exception:
-    psycopg = None
+st.set_page_config(page_title="GT Auradata", page_icon="assets/favicon.png", layout="wide")
+
+st.markdown("""
+    <style>
+        [data-testid="stSidebar"] > div:first-child {
+            overflow-y: hidden;
+        }
+            
+        .nav-link:has(span:not(:empty)):hover {
+            background-color: blue !important;
+            cursor: pointer;
+        }
+
+        .nav-link:has(span:empty):hover {
+            background-color: transparent !important;
+            cursor: default;
+        }
+    </style>
+""", unsafe_allow_html=True)
 
 
-@st.cache_resource
-def get_connection():
-    """
-    Renvoie une connexion PostgreSQL (psycopg v3) en utilisant st.secrets['database']['url'].
-    Compatible avec Supabase PostgreSQL.
-    """
-    if psycopg is None:
-        raise RuntimeError(
-            "Le module psycopg n'est pas disponible. "
-            "Ajoutez 'psycopg[binary]' dans requirements.txt et redéployez."
+if "logged_in" not in st.session_state or not st.session_state.logged_in:
+    show_login_page()
+
+else:
+    with st.sidebar:
+        col1, col2, col3 = st.columns([0.5, 2, 0.5])
+        with col2:
+            st.image("assets/logo.png", width=130)
+
+        st.markdown("<div style='flex:1;></div>", unsafe_allow_html=True)
+        selected = option_menu(
+            "",
+            ["Dashboard", "Feuille de temps", "Demande d'absence", "Validation absence", "Validation feuille","","","Administration", "Compte rendu d'activité", "Guide utilisateur", "Déconnexion"],
+            icons=["bar-chart", "clock", "file-earmark-text", "check-circle", "check-square","\u200b","\u200b", "gear", "journal-text", "book","box-arrow-right"],
+            menu_icon="none",
+            styles={
+                "container": {
+                    "background-color": "transparent",
+                    "width":"230px",
+                    "padding": "0px",
+                    "margin": "0px",
+                },
+                "nav-link": {
+                    "font-size": "14px",
+                    "font-family": "Segoe UI",
+                    "text-align": "left",
+                    "padding": "10px",
+                    "margin": "0px",
+                    "color": "#333333",
+                },
+                "nav-link-selected": {
+                    "background-color": "#080686",
+                    "color": "white",
+                    "font-weight": "bold",
+                },
+            }
         )
 
-    try:
-        dsn = st.secrets["database"]["url"]
-    except Exception as e:
-        raise RuntimeError(
-            "Clé 'database.url' manquante dans .streamlit/secrets.toml"
-        ) from e
+    if selected == "Dashboard":
+        import dashboard
+        dashboard.show_dashboard()
 
-    conn = psycopg.connect(dsn)
-    return conn
+    elif selected == "Feuille de temps":
+        import feuille_temps
+        feuille_temps.show_feuille_temps()
 
+    elif selected == "Demande d'absence":
+        import demande_absence
+        demande_absence.show_demande_absence()
+    
+    elif selected == "Validation absence":
+        import validation_absence
+        validation_absence.show_validation_absence()
 
-# --- Connexion Supabase (API REST) -------------------------------------------
-try:
-    from supabase import create_client, Client
-except Exception:
-    create_client = None
-    Client = None
+    elif selected == "Validation feuille":
+        import validation_feuille
+        validation_feuille.show_validation_feuille()
 
+    elif selected == "Administration":
+        import admin
+        admin.show_admin()
 
-@st.cache_resource
-def init_supabase() -> "Client":
-    """
-    Initialise et met en cache un client Supabase Python.
-    """
-    if create_client is None:
-        raise RuntimeError(
-            "Le package 'supabase' n'est pas installé. "
-            "Ajoutez 'supabase==2.5.1' dans requirements.txt."
-        )
-    try:
-        url = st.secrets["supabase"]["url"]
-        key = st.secrets["supabase"]["key"]
-    except Exception as e:
-        raise RuntimeError(
-            "⚠️ Clés 'supabase.url' et/ou 'supabase.key' manquantes dans .streamlit/secrets.toml"
-        ) from e
+    elif selected == "Compte rendu d'activité":
+        import compte_rendu_activite
+        compte_rendu_activite.show_compte_rendu_activite()
 
-    return create_client(url, key)
+    elif selected == "Guide utilisateur":
+        import guide_utilisateur
+        guide_utilisateur.show_guide_utilisateur()
 
-
-supabase: "Client" = init_supabase()
-
-
-# --- Authentification --------------------------------------------------------
-def hash_password(password: str) -> str:
-    """Retourne un hachage SHA-256 du mot de passe."""
-    return hashlib.sha256(password.encode("utf-8")).hexdigest()
-
-
-def verify_user(email: str, password: str):
-    """
-    Vérifie les identifiants d’un utilisateur dans la table 'users'.
-    Retourne un dictionnaire {id, email, name, role} si OK, sinon None.
-    """
-    try:
-        pw_hash = hash_password(password)
-        resp = (
-            supabase.table("users")
-            .select("id, email, name, password_hashed, roles(role)")
-            .eq("email", email)
-            .eq("password_hashed", pw_hash)
-            .limit(1)
-            .execute()
-        )
-
-        if resp.data and len(resp.data) > 0:
-            return resp.data[0]  # ✅ retourne un objet user complet
-        return None
-
-    except Exception as e:
-        st.error(f"Erreur de vérification utilisateur : {e}")
-        return None
-
-
-def create_user(email, name, password, role="consultant"):
-    """
-    Crée un nouvel utilisateur dans Supabase avec un rôle associé.
-    """
-    try:
-        hashed = hash_password(password)
-        insert = supabase.table("users").insert({
-            "email": email,
-            "name": name,
-            "password_hashed": hashed,
-            "is_active": True
-        }).execute()
-
-        if not insert or not insert.data:
-            st.error("❌ Insertion utilisateur échouée.")
-            return False
-
-        user_id = insert.data[0].get("id")
-        if not user_id:
-            st.error("❌ Aucun ID utilisateur retourné.")
-            return False
-
-        supabase.table("roles").insert({
-            "user_id": user_id,
-            "role": role
-        }).execute()
-
-        st.success(f"✅ Utilisateur {email} créé avec succès.")
-        return True
-
-    except Exception as e:
-        st.error(f"Erreur lors de la création de l’utilisateur : {e}")
-        return False
+    elif selected == "Déconnexion":
+        st.session_state.logged_in = False
+        st.rerun()
