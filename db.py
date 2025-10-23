@@ -83,16 +83,16 @@ def hash_password(password: str) -> str:
 def verify_user(email: str, password: str) -> bool:
     """
     Vérifie les identifiants contre la table 'users' de Supabase
-    (colonnes attendues : email, password_hash).
+    (colonnes attendues : email, password_hashed).
     Adaptez ce code si vous utilisez une autre stratégie (GoTrue/Auth, RLS, etc.).
     """
     try:
         pw_hash = hash_password(password)
         resp = (
             supabase.table("users")
-            .select("id, email, password_hash")
+            .select("id, email, password_hashed")
             .eq("email", email)
-            .eq("password_hash", pw_hash)
+            .eq("password_hashed", pw_hash)
             .limit(1)
             .execute()
         )
