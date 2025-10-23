@@ -1,83 +1,135 @@
-# db.py
+import sqlite3
 import hashlib
-import socket
 import psycopg2
 import streamlit as st
 
-def hash_password(password: str) -> str:
+def hash_password(password):
     return hashlib.sha256(password.encode()).hexdigest()
 
-def _resolve_ipv4(host: str) -> str | None:
-    try:
-        infos = socket.getaddrinfo(host, None, family=socket.AF_INET, type=socket.SOCK_STREAM)
-        return infos[0][4][0] if infos else None
-    except Exception:
-        return None
-
 def get_connection():
-    if "postgres" not in st.secrets:
-        st.error("❌ [postgres] absent dans .streamlit/secrets.toml")
-        st.stop()
-
-    cfg = st.secrets["postgres"]
-    required = ("host", "port", "dbname", "user", "password")
-    missing = [k for k in required if not cfg.get(k)]
-    if missing:
-        st.error(f"❌ secrets.toml incomplet → manquant: {', '.join(missing)}")
-        st.stop()
-
-    host     = str(cfg["host"]).strip()
-    port     = int(cfg["port"])
-    dbname   = str(cfg["dbname"]).strip()
-    user     = str(cfg["user"]).strip()
-    password = str(cfg["password"])
-    hostaddr = str(cfg.get("hostaddr") or "").strip()
-
-    # Vérifs de cohérence basiques
-    if host.endswith(".supabase.co") and port == 6543:
-        st.error("❌ Mauvais couple host/port: db.…supabase.co doit utiliser port 5432 (connexion directe).")
-        st.stop()
-    if host.endswith(".pooler.supabase.com") and port != 6543:
-        st.error("❌ Mauvais couple host/port: *.pooler.supabase.com doit utiliser port 6543 (pooler).")
-        st.stop()
-
-    # Forcer IPv4 si provided ou si l’environnement ne renvoie qu’une AAAA
-    inferred_ipv4 = _resolve_ipv4(host)
-    use_addr = hostaddr or inferred_ipv4 or None
-
-    st.caption(
-        "🔌 Tentative connexion PostgreSQL → "
-        f"host={host} port={port} db={dbname} user={user} "
-        f"{'(IPv4 forcée=' + use_addr + ')' if use_addr else '(IPv4 non forcée)'}"
+    conn = psycopg2.connect(
+        host=st.secrets["postgres"]["host"],
+        database=st.secrets["postgres"]["dbname"],
+        user=st.secrets["postgres"]["user"],
+        password=st.secrets["postgres"]["password"],
+        port=st.secrets["postgres"]["port"]
     )
+    return conn
 
-    kwargs = dict(
-        host=host,
-        port=port,
-        dbname=dbname,
-        user=user,
-        password=password,
-        sslmode="require",
-        connect_timeout=6,         # évite d’attendre trop longtemps
-        options="-c statement_timeout=15000"  # 15s pour les requêtes
-    )
-    if use_addr:
-        kwargs["hostaddr"] = use_addr
+def init_db():
+    conn = get_connection()
+    cursor = conn.cursor()
 
-    try:
-        conn = psycopg2.connect(**kwargs)
-        return conn
-    except Exception as e:
-        # Messages d’aide ciblés
-        if "password authentication failed" in str(e):
-            st.error("❌ Mot de passe PostgreSQL invalide. Réinitialise-le dans Supabase > Settings > Database.")
-        elif "No address associated" in str(e) or "Name or service not known" in str(e):
-            st.error("❌ DNS/host invalide. Vérifie 'host' dans secrets.toml.")
-        elif "Cannot assign requested address" in str(e):
-            st.error("❌ Ton runtime ne sort pas en IPv6. Ajoute 'hostaddr' (IPv4 publique du host) dans secrets.toml.")
-        elif "FATAL: Tenant or user not found" in str(e):
-            st.error("❌ Pooler: mauvais host/user/dbname. Utilise EXACTEMENT la Pooled connection string du Dashboard.")
-        else:
-            st.error("❌ Échec de connexion PostgreSQL.")
-        st.exception(e)
-        st.stop()
+    cursor.execute("""
+        CREATE TABLE IF NOT EXISTS users (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            email TEXT UNIQUE NOT NULL,
+            name TEXT NOT NULL,
+            password_hashed TEXT NOT NULL,
+            is_active INTEGER DEFAULT 1,
+            must_change_password INTEGER DEFAULT 0,
+            activated_once INTEGER DEFAULT 0
+        )
+    """)
+
+    cursor.execute("""
+        CREATE TABLE IF NOT EXISTS roles (
+            user_id INTEGER PRIMARY KEY,
+            role TEXT CHECK (role IN ('consultant', 'rh', 'admin')) DEFAULT 'consultant',
+            FOREIGN KEY(user_id) REFERENCES users(id) ON DELETE CASCADE
+        )
+    """)
+
+    cursor.execute("""
+        CREATE TABLE IF NOT EXISTS feuille_temps (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            user_id INTEGER NOT NULL,
+            date DATE NOT NULL,
+            statut_jour TEXT CHECK (statut_jour IN ('travail', 'télétravail', 'congé', 'maladie', 'RTT')) DEFAULT 'travail',
+            valeur REAL CHECK (valeur IN (0, 0.5, 1)) DEFAULT 1,
+            FOREIGN KEY(user_id) REFERENCES users(id),
+            UNIQUE(user_id, date)
+        )
+    """)
+
+    cursor.execute("""
+        CREATE TABLE IF NOT EXISTS absences (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            user_id INTEGER NOT NULL,
+            type_absence TEXT NOT NULL,
+            date_debut DATE NOT NULL,
+            date_fin DATE NOT NULL,
+            commentaire TEXT,
+            statut TEXT CHECK (statut IN ('En attente', 'Approuvée', 'Rejetée')) DEFAULT 'En attente',
+            date_demande DATE,
+            justificatif TEXT,
+            FOREIGN KEY(user_id) REFERENCES users(id)
+        )
+    """)
+
+    cursor.execute("""
+        CREATE TABLE IF NOT EXISTS validation_absence (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            absence_id INTEGER NOT NULL,
+            validateur_id INTEGER NOT NULL,
+            date_validation DATE,
+            statut TEXT CHECK (statut IN ('Approuvée', 'Rejetée')),
+            commentaire TEXT,
+            FOREIGN KEY(absence_id) REFERENCES absences(id),
+            FOREIGN KEY(validateur_id) REFERENCES users(id)
+        )
+    """)
+    
+    cursor.execute("""
+        CREATE TABLE IF NOT EXISTS feuille_temps_statut (
+            user_id INTEGER NOT NULL,
+            annee INTEGER NOT NULL,
+            mois INTEGER NOT NULL,
+            statut TEXT CHECK (statut IN ('brouillon', 'en attente', 'validée', 'rejetée')) DEFAULT 'brouillon',
+            motif_refus TEXT,
+            PRIMARY KEY(user_id, annee, mois),
+            FOREIGN KEY(user_id) REFERENCES users(id)
+        )
+    """)
+
+    cursor.execute("""
+        CREATE TABLE IF NOT EXISTS projets (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            nom TEXT NOT NULL,
+            outil TEXT NOT NULL,
+            heures_prevues INTEGER
+        )
+    """)
+
+    cursor.execute("""
+        CREATE TABLE IF NOT EXISTS attribution_projet (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            user_id INTEGER NOT NULL,
+            projet_id INTEGER NOT NULL,
+            FOREIGN KEY(user_id) REFERENCES users(id),
+            FOREIGN KEY(projet_id) REFERENCES projets(id),
+            UNIQUE(user_id, projet_id)
+        )
+    """)
+    
+    cursor.execute("""
+        CREATE TABLE IF NOT EXISTS heures_saisie (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            user_id INTEGER NOT NULL,
+            projet_id INTEGER NOT NULL,
+            date_jour DATE NOT NULL,
+            heures REAL NOT NULL,
+            UNIQUE(user_id, projet_id, date_jour)
+        )
+    """)
+
+    cursor.execute("""
+        CREATE TABLE IF NOT EXISTS parametres_conges (
+            annee INTEGER PRIMARY KEY,
+            cp_total INTEGER NOT NULL,
+            rtt_total INTEGER NOT NULL
+        )
+    """)
+
+    conn.commit()
+    conn.close()
