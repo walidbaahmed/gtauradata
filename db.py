@@ -1,73 +1,83 @@
 # db.py
 import hashlib
+import socket
 import psycopg2
 import streamlit as st
 
-# --- Hash de mot de passe ---
 def hash_password(password: str) -> str:
     return hashlib.sha256(password.encode()).hexdigest()
 
-# --- Connexion DB (respecte STRICTEMENT secrets.toml) ---
+def _resolve_ipv4(host: str) -> str | None:
+    try:
+        infos = socket.getaddrinfo(host, None, family=socket.AF_INET, type=socket.SOCK_STREAM)
+        return infos[0][4][0] if infos else None
+    except Exception:
+        return None
+
 def get_connection():
-    """
-    Utilise EXCLUSIVEMENT [postgres] dans .streamlit/secrets.toml :
-      host, port, dbname, user, password, (optionnel) hostaddr pour forcer l'IPv4.
-    Ne teste aucun autre host/port/user en arrière-plan.
-    """
     if "postgres" not in st.secrets:
-        st.error("❌ Section [postgres] manquante dans secrets.toml.")
+        st.error("❌ [postgres] absent dans .streamlit/secrets.toml")
         st.stop()
 
     cfg = st.secrets["postgres"]
     required = ("host", "port", "dbname", "user", "password")
     missing = [k for k in required if not cfg.get(k)]
     if missing:
-        st.error(f"❌ secrets.toml incomplet. Clés manquantes: {', '.join(missing)}")
+        st.error(f"❌ secrets.toml incomplet → manquant: {', '.join(missing)}")
         st.stop()
 
-    kwargs = dict(
-        host=cfg["host"],
-        port=int(cfg["port"]),
-        dbname=cfg["dbname"],
-        user=cfg["user"],
-        password=cfg["password"],
-        sslmode="require",
+    host     = str(cfg["host"]).strip()
+    port     = int(cfg["port"])
+    dbname   = str(cfg["dbname"]).strip()
+    user     = str(cfg["user"]).strip()
+    password = str(cfg["password"])
+    hostaddr = str(cfg.get("hostaddr") or "").strip()
+
+    # Vérifs de cohérence basiques
+    if host.endswith(".supabase.co") and port == 6543:
+        st.error("❌ Mauvais couple host/port: db.…supabase.co doit utiliser port 5432 (connexion directe).")
+        st.stop()
+    if host.endswith(".pooler.supabase.com") and port != 6543:
+        st.error("❌ Mauvais couple host/port: *.pooler.supabase.com doit utiliser port 6543 (pooler).")
+        st.stop()
+
+    # Forcer IPv4 si provided ou si l’environnement ne renvoie qu’une AAAA
+    inferred_ipv4 = _resolve_ipv4(host)
+    use_addr = hostaddr or inferred_ipv4 or None
+
+    st.caption(
+        "🔌 Tentative connexion PostgreSQL → "
+        f"host={host} port={port} db={dbname} user={user} "
+        f"{'(IPv4 forcée=' + use_addr + ')' if use_addr else '(IPv4 non forcée)'}"
     )
-    # Optionnel : forcer IPv4 si ton runtime casse en IPv6
-    if cfg.get("hostaddr"):
-        kwargs["hostaddr"] = cfg["hostaddr"]
+
+    kwargs = dict(
+        host=host,
+        port=port,
+        dbname=dbname,
+        user=user,
+        password=password,
+        sslmode="require",
+        connect_timeout=6,         # évite d’attendre trop longtemps
+        options="-c statement_timeout=15000"  # 15s pour les requêtes
+    )
+    if use_addr:
+        kwargs["hostaddr"] = use_addr
 
     try:
         conn = psycopg2.connect(**kwargs)
         return conn
     except Exception as e:
-        st.error("❌ Échec de connexion PostgreSQL. Vérifie secrets.toml (host/port/user/db/password) et, si besoin, renseigne hostaddr (IPv4).")
+        # Messages d’aide ciblés
+        if "password authentication failed" in str(e):
+            st.error("❌ Mot de passe PostgreSQL invalide. Réinitialise-le dans Supabase > Settings > Database.")
+        elif "No address associated" in str(e) or "Name or service not known" in str(e):
+            st.error("❌ DNS/host invalide. Vérifie 'host' dans secrets.toml.")
+        elif "Cannot assign requested address" in str(e):
+            st.error("❌ Ton runtime ne sort pas en IPv6. Ajoute 'hostaddr' (IPv4 publique du host) dans secrets.toml.")
+        elif "FATAL: Tenant or user not found" in str(e):
+            st.error("❌ Pooler: mauvais host/user/dbname. Utilise EXACTEMENT la Pooled connection string du Dashboard.")
+        else:
+            st.error("❌ Échec de connexion PostgreSQL.")
         st.exception(e)
         st.stop()
-
-# --- Schéma minimal (cohérent avec password_hashed) ---
-def init_db():
-    conn = get_connection()
-    cur = conn.cursor()
-
-    cur.execute("""
-        CREATE TABLE IF NOT EXISTS users (
-            id SERIAL PRIMARY KEY,
-            email TEXT UNIQUE NOT NULL,
-            name TEXT NOT NULL,
-            password_hashed TEXT NOT NULL,
-            is_active BOOLEAN DEFAULT TRUE,
-            must_change_password BOOLEAN DEFAULT FALSE,
-            activated_once BOOLEAN DEFAULT FALSE
-        );
-    """)
-
-    cur.execute("""
-        CREATE TABLE IF NOT EXISTS roles (
-            user_id INTEGER PRIMARY KEY REFERENCES users(id) ON DELETE CASCADE,
-            role TEXT CHECK (role IN ('consultant', 'rh', 'admin')) DEFAULT 'consultant'
-        );
-    """)
-
-    conn.commit()
-    conn.close()
