@@ -1,98 +1,135 @@
+import sqlite3
+import hashlib
+import psycopg2
 import streamlit as st
-from streamlit_option_menu import option_menu
-from login import show_login_page
 
-st.set_page_config(page_title="GT Auradata", page_icon="assets/favicon.png", layout="wide")
+def hash_password(password):
+    return hashlib.sha256(password.encode()).hexdigest()
 
-st.markdown("""
-    <style>
-        [data-testid="stSidebar"] > div:first-child {
-            overflow-y: hidden;
-        }
-            
-        .nav-link:has(span:not(:empty)):hover {
-            background-color: blue !important;
-            cursor: pointer;
-        }
+def get_connection():
+    conn = psycopg2.connect(
+        host=st.secrets["postgres"]["host"],
+        database=st.secrets["postgres"]["dbname"],
+        user=st.secrets["postgres"]["user"],
+        password=st.secrets["postgres"]["password"],
+        port=st.secrets["postgres"]["port"]
+    )
+    return conn
 
-        .nav-link:has(span:empty):hover {
-            background-color: transparent !important;
-            cursor: default;
-        }
-    </style>
-""", unsafe_allow_html=True)
+def init_db():
+    conn = get_connection()
+    cursor = conn.cursor()
 
-
-if "logged_in" not in st.session_state or not st.session_state.logged_in:
-    show_login_page()
-
-else:
-    with st.sidebar:
-        col1, col2, col3 = st.columns([0.5, 2, 0.5])
-        with col2:
-            st.image("assets/logo.png", width=130)
-
-        st.markdown("<div style='flex:1;></div>", unsafe_allow_html=True)
-        selected = option_menu(
-            "",
-            ["Dashboard", "Feuille de temps", "Demande d'absence", "Validation absence", "Validation feuille","","","Administration", "Compte rendu d'activité", "Guide utilisateur", "Déconnexion"],
-            icons=["bar-chart", "clock", "file-earmark-text", "check-circle", "check-square","\u200b","\u200b", "gear", "journal-text", "book","box-arrow-right"],
-            menu_icon="none",
-            styles={
-                "container": {
-                    "background-color": "transparent",
-                    "width":"230px",
-                    "padding": "0px",
-                    "margin": "0px",
-                },
-                "nav-link": {
-                    "font-size": "14px",
-                    "font-family": "Segoe UI",
-                    "text-align": "left",
-                    "padding": "10px",
-                    "margin": "0px",
-                    "color": "#333333",
-                },
-                "nav-link-selected": {
-                    "background-color": "#080686",
-                    "color": "white",
-                    "font-weight": "bold",
-                },
-            }
+    cursor.execute("""
+        CREATE TABLE IF NOT EXISTS users (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            email TEXT UNIQUE NOT NULL,
+            name TEXT NOT NULL,
+            password_hashed TEXT NOT NULL,
+            is_active INTEGER DEFAULT 1,
+            must_change_password INTEGER DEFAULT 0,
+            activated_once INTEGER DEFAULT 0
         )
+    """)
 
-    if selected == "Dashboard":
-        import dashboard
-        dashboard.show_dashboard()
+    cursor.execute("""
+        CREATE TABLE IF NOT EXISTS roles (
+            user_id INTEGER PRIMARY KEY,
+            role TEXT CHECK (role IN ('consultant', 'rh', 'admin')) DEFAULT 'consultant',
+            FOREIGN KEY(user_id) REFERENCES users(id) ON DELETE CASCADE
+        )
+    """)
 
-    elif selected == "Feuille de temps":
-        import feuille_temps
-        feuille_temps.show_feuille_temps()
+    cursor.execute("""
+        CREATE TABLE IF NOT EXISTS feuille_temps (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            user_id INTEGER NOT NULL,
+            date DATE NOT NULL,
+            statut_jour TEXT CHECK (statut_jour IN ('travail', 'télétravail', 'congé', 'maladie', 'RTT')) DEFAULT 'travail',
+            valeur REAL CHECK (valeur IN (0, 0.5, 1)) DEFAULT 1,
+            FOREIGN KEY(user_id) REFERENCES users(id),
+            UNIQUE(user_id, date)
+        )
+    """)
 
-    elif selected == "Demande d'absence":
-        import demande_absence
-        demande_absence.show_demande_absence()
+    cursor.execute("""
+        CREATE TABLE IF NOT EXISTS absences (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            user_id INTEGER NOT NULL,
+            type_absence TEXT NOT NULL,
+            date_debut DATE NOT NULL,
+            date_fin DATE NOT NULL,
+            commentaire TEXT,
+            statut TEXT CHECK (statut IN ('En attente', 'Approuvée', 'Rejetée')) DEFAULT 'En attente',
+            date_demande DATE,
+            justificatif TEXT,
+            FOREIGN KEY(user_id) REFERENCES users(id)
+        )
+    """)
+
+    cursor.execute("""
+        CREATE TABLE IF NOT EXISTS validation_absence (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            absence_id INTEGER NOT NULL,
+            validateur_id INTEGER NOT NULL,
+            date_validation DATE,
+            statut TEXT CHECK (statut IN ('Approuvée', 'Rejetée')),
+            commentaire TEXT,
+            FOREIGN KEY(absence_id) REFERENCES absences(id),
+            FOREIGN KEY(validateur_id) REFERENCES users(id)
+        )
+    """)
     
-    elif selected == "Validation absence":
-        import validation_absence
-        validation_absence.show_validation_absence()
+    cursor.execute("""
+        CREATE TABLE IF NOT EXISTS feuille_temps_statut (
+            user_id INTEGER NOT NULL,
+            annee INTEGER NOT NULL,
+            mois INTEGER NOT NULL,
+            statut TEXT CHECK (statut IN ('brouillon', 'en attente', 'validée', 'rejetée')) DEFAULT 'brouillon',
+            motif_refus TEXT,
+            PRIMARY KEY(user_id, annee, mois),
+            FOREIGN KEY(user_id) REFERENCES users(id)
+        )
+    """)
 
-    elif selected == "Validation feuille":
-        import validation_feuille
-        validation_feuille.show_validation_feuille()
+    cursor.execute("""
+        CREATE TABLE IF NOT EXISTS projets (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            nom TEXT NOT NULL,
+            outil TEXT NOT NULL,
+            heures_prevues INTEGER
+        )
+    """)
 
-    elif selected == "Administration":
-        import admin
-        admin.show_admin()
+    cursor.execute("""
+        CREATE TABLE IF NOT EXISTS attribution_projet (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            user_id INTEGER NOT NULL,
+            projet_id INTEGER NOT NULL,
+            FOREIGN KEY(user_id) REFERENCES users(id),
+            FOREIGN KEY(projet_id) REFERENCES projets(id),
+            UNIQUE(user_id, projet_id)
+        )
+    """)
+    
+    cursor.execute("""
+        CREATE TABLE IF NOT EXISTS heures_saisie (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            user_id INTEGER NOT NULL,
+            projet_id INTEGER NOT NULL,
+            date_jour DATE NOT NULL,
+            heures REAL NOT NULL,
+            UNIQUE(user_id, projet_id, date_jour)
+        )
+    """)
 
-    elif selected == "Compte rendu d'activité":
-        import compte_rendu_activite
-        compte_rendu_activite.show_compte_rendu_activite()
+    cursor.execute("""
+        CREATE TABLE IF NOT EXISTS parametres_conges (
+            annee INTEGER PRIMARY KEY,
+            cp_total INTEGER NOT NULL,
+            rtt_total INTEGER NOT NULL
+        )
+    """)
 
-    elif selected == "Guide utilisateur":
-        import guide_utilisateur
-        guide_utilisateur.show_guide_utilisateur()
-
-    elif selected == "Déconnexion":
-        st.session_state.logged_in = False
-        st.rerun()
+    conn.commit()
+    conn.close()
