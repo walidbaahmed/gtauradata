@@ -4,61 +4,44 @@ from login import show_login_page
 
 st.set_page_config(page_title="GT Auradata", page_icon="assets/favicon.png", layout="wide")
 
-# CSS (triple quotes en apostrophes pour éviter les conflits)
-st.markdown(r'''
+st.markdown("""
     <style>
         [data-testid="stSidebar"] > div:first-child {
             overflow-y: hidden;
         }
-
-        /* Effet hover seulement quand l'élément a un label */
+            
         .nav-link:has(span:not(:empty)):hover {
             background-color: blue !important;
             cursor: pointer;
         }
+
         .nav-link:has(span:empty):hover {
             background-color: transparent !important;
             cursor: default;
         }
     </style>
-''', unsafe_allow_html=True)
+""", unsafe_allow_html=True)
 
-if "logged_in" not in st.session_state or not st.session_state.get("logged_in"):
+
+if "logged_in" not in st.session_state or not st.session_state.logged_in:
     show_login_page()
+
 else:
     with st.sidebar:
         col1, col2, col3 = st.columns([0.5, 2, 0.5])
         with col2:
             st.image("assets/logo.png", width=130)
 
-        # Spacer (guillemet manquant corrigé)
-        st.markdown("<div style='flex:1;'></div>", unsafe_allow_html=True)
-
+        st.markdown("<div style='flex:1;></div>", unsafe_allow_html=True)
         selected = option_menu(
             "",
-            [
-                "Dashboard",
-                "Feuille de temps",
-                "Demande d'absence",
-                "Validation absence",
-                "Validation feuille",
-                "", "",  # séparateurs visuels
-                "Administration",
-                "Compte rendu d'activité",
-                "Guide utilisateur",
-                "Déconnexion",
-            ],
-            icons=[
-                "bar-chart", "clock", "file-earmark-text",
-                "check-circle", "check-square",
-                "\u200b", "\u200b",
-                "gear", "journal-text", "book", "box-arrow-right"
-            ],
+            ["Dashboard", "Feuille de temps", "Demande d'absence", "Validation absence", "Validation feuille","","","Administration", "Compte rendu d'activité", "Guide utilisateur", "Déconnexion"],
+            icons=["bar-chart", "clock", "file-earmark-text", "check-circle", "check-square","\u200b","\u200b", "gear", "journal-text", "book","box-arrow-right"],
             menu_icon="none",
             styles={
                 "container": {
                     "background-color": "transparent",
-                    "width": "230px",
+                    "width":"230px",
                     "padding": "0px",
                     "margin": "0px",
                 },
@@ -89,7 +72,7 @@ else:
     elif selected == "Demande d'absence":
         import demande_absence
         demande_absence.show_demande_absence()
-
+    
     elif selected == "Validation absence":
         import validation_absence
         validation_absence.show_validation_absence()
@@ -111,5 +94,5 @@ else:
         guide_utilisateur.show_guide_utilisateur()
 
     elif selected == "Déconnexion":
-        st.session_state["logged_in"] = False
+        st.session_state.logged_in = False
         st.rerun()
